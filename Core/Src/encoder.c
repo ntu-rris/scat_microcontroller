@@ -1,35 +1,16 @@
 #include <encoder.h>
 #include <math.h>
+//#include <dwt_delay.h>
 
 #define MOVING_AVERAGE_SIZE 20
+#define EXPONENTIAL_ALPHA 0.85
 
-extern SPI_HandleTypeDef hspi1;			// for Encoder 1
-extern SPI_HandleTypeDef hspi6;			// for Encoder 2
+extern SPI_HandleTypeDef hspi6;			// for Encoders
+extern SPI_HandleTypeDef hspi1;			// for Encoders
 
 uint16_t encoder_vals_prev[2] = {-1, -1};
 double velocities_prev[2] = {0, 0};
-//double velocities_raw[2] = {0, 0};
 uint32_t prev_time = 0;
-
-//Variables for average filter of velocity
-uint8_t sum_count[2] = {0, 0};
-double sum[2] = {0, 0};
-double window_left[MOVING_AVERAGE_SIZE] = {0}, window_right[MOVING_AVERAGE_SIZE] = {0};
-
-double movingAverage(double* window, double* sum, uint8_t* count, uint8_t len, double next_num)
-{
-	//Subtract 5th inserted number from sum and then add next number
-	*sum = *sum - window[*count] + next_num;
-
-	//Assign next_num to the element that was just erased from the sum
-	window[*count] = next_num;
-
-	++*count;
-	if(*count >= len)
-		*count = 0;
-
-	return *sum / len;
-}
 
 // Read Position
 // Hex command sequence: 0x00 0x00
@@ -46,20 +27,33 @@ void encoderRead(uint16_t *encoder_vals)
 
 	// Encoder 2
 	ENCODER2_CS_LOW;
-	//Read packet high and packet low separetely, otherwise reading not stable
+
+	//Delay required as encoder is only readable after 25us from chip select low
+//	DWT_Delay(4);
 	HAL_SPI_TransmitReceive(&hspi6, &SPItransmit[0], &receive_buff[0], 1, 1);
+
+	//Delay required between bytes
+//	DWT_Delay(4);
 	HAL_SPI_TransmitReceive(&hspi6, &SPItransmit[1], &receive_buff[1], 1, 1);
+
+	//There is also a required delay before releasing the CS line
+//	DWT_Delay(4);
 	ENCODER2_CS_HIGH;
 	temp = (uint16_t)receive_buff[0]<< 8 | receive_buff[1];
-	encoder_vals[LEFT_INDEX] = temp & 0x3FFF;
+
+	//Remove checksum bits (2 MSB bits)
+	encoder_vals[RIGHT_INDEX] = temp & 0x3FFF;
 	
 	// Encoder 1
 	ENCODER1_CS_LOW;
+//	DWT_Delay(4);
 	HAL_SPI_TransmitReceive(&hspi1, &SPItransmit[0], &receive_buff[0], 1, 1);
+//	DWT_Delay(4);
 	HAL_SPI_TransmitReceive(&hspi1, &SPItransmit[1], &receive_buff[1], 1, 1);
+//	DWT_Delay(4);
 	ENCODER1_CS_HIGH;
 	temp = (uint16_t)receive_buff[0]<< 8 | receive_buff[1];
-	encoder_vals[RIGHT_INDEX] = temp & 0x3FFF;
+	encoder_vals[LEFT_INDEX] = temp & 0x3FFF;
 }
 
 void calcVelFromEncoder(uint16_t *encoder_vals, double *velocities)
@@ -113,9 +107,9 @@ void calcVelFromEncoder(uint16_t *encoder_vals, double *velocities)
 		velocities[LEFT_INDEX] = velocities_prev[LEFT_INDEX] + WHEEL_ACC_LIMIT * dt * (left_acc / fabs(left_acc));
 	}
 
-	//Moving average for each velocity
-	velocities[RIGHT_INDEX] = movingAverage(window_right, &sum[RIGHT_INDEX], &sum_count[RIGHT_INDEX], (uint8_t)MOVING_AVERAGE_SIZE, velocities[RIGHT_INDEX]);
-	velocities[LEFT_INDEX] = movingAverage(window_left, &sum[LEFT_INDEX], &sum_count[LEFT_INDEX], (uint8_t)MOVING_AVERAGE_SIZE, velocities[LEFT_INDEX]);
+	//Exponential filter for each velocity
+	velocities[RIGHT_INDEX] = velocities[RIGHT_INDEX] * EXPONENTIAL_ALPHA + (1.0 - EXPONENTIAL_ALPHA) * velocities_prev[RIGHT_INDEX];
+	velocities[LEFT_INDEX] = velocities[LEFT_INDEX] * EXPONENTIAL_ALPHA + (1.0 - EXPONENTIAL_ALPHA) * velocities_prev[LEFT_INDEX];
 
 	//Set all previous values to current values
 	encoder_vals_prev[RIGHT_INDEX] = encoder_vals[RIGHT_INDEX];

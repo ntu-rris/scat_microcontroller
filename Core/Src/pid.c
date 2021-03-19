@@ -210,7 +210,7 @@ double PID_getOutput(PID_Struct* pid, double actual, double setpoint)
 	if (pid->outputRampRate != 0 && pid->outputDescentRate != 0)
 	{
 		//If output is positive, allow outputRampRate increase and outputDescentRate decrease
-		if(output >= 0)
+		if(pid->lastOutput > 0)
 		{
 			if(!bounded(output, pid->lastOutput + pid->outputDescentRate * dt, pid->lastOutput + pid->outputRampRate * dt))
 			{

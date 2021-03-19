@@ -26,6 +26,8 @@
 #include <encoder.h>
 #include <pid.h>
 #include <math.h>
+#include <stdio.h>
+#include <dwt_delay.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -35,6 +37,10 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define ROS_UART huart2
+#define BRAKE_TIM htim4
+#define BRAKE_CHANNEL CCR1
+#define MOTOR_TIM htim4
 
 /* USER CODE END PD */
 
@@ -48,7 +54,7 @@ ADC_HandleTypeDef hadc1;
 DMA_HandleTypeDef hdma_adc1;
 
 SPI_HandleTypeDef hspi1;
-SPI_HandleTypeDef hspi3;
+SPI_HandleTypeDef hspi4;
 SPI_HandleTypeDef hspi6;
 
 TIM_HandleTypeDef htim4;
@@ -58,27 +64,30 @@ DMA_HandleTypeDef hdma_usart2_rx;
 DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
+//Variables to store raw data from various sensors and uart
 uint32_t joystick_raw;
-uint16_t joystick[2];
-int16_t acc[3], gyro[3], temp;
+int16_t acc[3], gyro[3];
 uint16_t encoder[2];
 uint8_t data_from_ros_raw[SIZE_DATA_FROM_ROS] = {0};
-uint16_t data_to_ros[SIZE_DATA_TO_ROS] = {0};
-int16_t data_from_ros[SIZE_DATA_FROM_ROS / 2];
-double setpoint_vel_prev[2];
+
+//Variables to store processed data
+uint16_t joystick[2];
+double joystick_filter = 0.025;
 double velocity[2];
+int16_t data_from_ros[SIZE_DATA_FROM_ROS / 2];
+
+int16_t motor_command[2] = {0};
+uint16_t data_to_ros[SIZE_DATA_TO_ROS] = {0};
+uint8_t braked = 1; //Stores the brake status of left and right motors
+double filtered_setpoint[2] = {0};
+double setpoint_vel[2];
+uint32_t brake_timer = 0;
+double engage_brakes_timeout = 5; //5s
+double angular_output = 0;
 
 //PID struct and their tunings. There's one PID controller for each motor
-PID_Struct left_pid, right_pid;
-//Integral limit should be set not too high if the integral gain is so high, to reduce inertia in system
-double p = 50.0, i = 450.0, d = 0.0, f = 370, max_i_output = 75;
-
-//Without integral, overshoot that happens when going straight immediately after pure rotation still occurs
-//It may seem like it's less because without integral, same command will result in slower velocities.
-//If match the rotational and linear velocity, then the resultant overshoot is similar
-//double p = 100.0, i = 0.0, d = 0.0, f = 370;
-
-double left_output, right_output;
+PID_Struct left_pid, right_pid, left_ramp_pid, right_ramp_pid, left_d_ramp_pid, right_d_ramp_pid;
+double p = 450.0, i = 500.0, d = 0.0, f = 370, max_i_output = 30;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -90,9 +99,9 @@ static void MX_ADC1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI6_Init(void);
-static void MX_SPI3_Init(void);
+static void MX_SPI4_Init(void);
 /* USER CODE BEGIN PFP */
-
+void setBrakes();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -127,6 +136,9 @@ int main(void)
   HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq() / FREQUENCY);
   HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);
   HAL_NVIC_SetPriority(SysTick_IRQn, 0, 0);
+
+  //Delay required for SPI encoder to startup
+  HAL_Delay(100);
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -137,12 +149,29 @@ int main(void)
   MX_SPI1_Init();
   MX_USART2_UART_Init();
   MX_SPI6_Init();
-  MX_SPI3_Init();
+  MX_SPI4_Init();
   /* USER CODE BEGIN 2 */
+//  DWT_Init();
   //Start motor PWM pins
-  HAL_TIM_Base_Start(&htim4);
-  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
-  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
+  HAL_TIM_Base_Start(&MOTOR_TIM);
+  HAL_TIM_PWM_Start(&MOTOR_TIM, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&MOTOR_TIM, TIM_CHANNEL_2);
+
+  //Start brake PWM pins
+  HAL_TIM_Base_Start(&BRAKE_TIM);
+  HAL_TIM_PWM_Start(&BRAKE_TIM, TIM_CHANNEL_1);
+
+  //Engage brakes
+  BRAKE_TIM.Instance->BRAKE_CHANNEL = 1000;
+
+  //Initialize IMU, check that it is connected
+  IMU_Init();
+
+  //********* WHEEL PID *********//
+  double base_left_ramp_rate = 100;
+  double base_right_ramp_rate = 150;
+  double base_left_d_ramp_rate = 100;
+  double base_right_d_ramp_rate = 160;
 
   //Setup right wheel PID
   PID_Init(&right_pid);
@@ -150,6 +179,8 @@ int main(void)
   PID_setMaxIOutput(&right_pid, max_i_output);
   PID_setOutputLimits(&right_pid, -500, 500);
   PID_setFrequency(&right_pid, 1000);
+  PID_setOutputRampRate(&right_pid, base_right_ramp_rate);
+  PID_setOutputDescentRate(&right_pid, -base_right_d_ramp_rate);
 
   //Setup left wheel PID
   PID_Init(&left_pid);
@@ -157,6 +188,58 @@ int main(void)
   PID_setMaxIOutput(&left_pid, max_i_output);
   PID_setOutputLimits(&left_pid, -500, 500);
   PID_setFrequency(&left_pid, 1000);
+  PID_setOutputRampRate(&left_pid, base_left_ramp_rate);
+  PID_setOutputDescentRate(&left_pid, -base_left_d_ramp_rate);
+
+  //********* WHEEL ACCEL RAMP PID *********//
+  double ramp_p = 300;
+  double max_ramp_rate_inc = 150;
+  //Setup right wheel ramp PID
+  PID_Init(&right_ramp_pid);
+  PID_setPIDF(&right_ramp_pid, ramp_p, 0, 0, 0);
+  PID_setOutputLimits(&right_ramp_pid, 0, 400);
+  PID_setOutputRampRate(&right_ramp_pid, max_ramp_rate_inc);
+  PID_setOutputDescentRate(&right_ramp_pid, -max_ramp_rate_inc);
+  PID_setFrequency(&right_ramp_pid, 1000);
+
+  //Setup left wheel ramp PID
+  PID_Init(&left_ramp_pid);
+  PID_setPIDF(&left_ramp_pid, ramp_p, 0, 0, 0);
+  PID_setOutputLimits(&left_ramp_pid, 0, 400);
+  PID_setOutputRampRate(&left_ramp_pid, max_ramp_rate_inc);
+  PID_setOutputDescentRate(&left_ramp_pid, -max_ramp_rate_inc);
+  PID_setFrequency(&left_ramp_pid, 1000);
+
+
+  //********* WHEEL DECEL RAMP PID *********//
+  double d_ramp_p = 500;
+  double max_d_ramp_rate_inc = 300;
+  //Setup right wheel d ramp PID
+  PID_Init(&right_d_ramp_pid);
+  PID_setPIDF(&right_d_ramp_pid, d_ramp_p, 0, 0, 0);
+  PID_setOutputLimits(&right_d_ramp_pid, 0, 250);
+  PID_setOutputRampRate(&right_d_ramp_pid, max_d_ramp_rate_inc);
+  PID_setOutputDescentRate(&right_d_ramp_pid, -max_d_ramp_rate_inc);
+  PID_setFrequency(&right_d_ramp_pid, 1000);
+
+  //Setup left wheel d ramp PID
+  PID_Init(&left_d_ramp_pid);
+  PID_setPIDF(&left_d_ramp_pid, d_ramp_p, 0, 0, 0);
+  PID_setOutputLimits(&left_d_ramp_pid, 0, 250);
+  PID_setOutputRampRate(&left_d_ramp_pid, max_d_ramp_rate_inc);
+  PID_setOutputDescentRate(&left_d_ramp_pid, -max_d_ramp_rate_inc);
+  PID_setFrequency(&left_d_ramp_pid, 1000);
+
+  //********* WHEEL ANGULAR DIFF PID *********//
+  PID_Struct angular_pid;
+  PID_Init(&angular_pid);
+  PID_setPIDF(&angular_pid, 0.10, 0, 0, 0);
+  PID_setOutputLimits(&angular_pid, -2, 2);
+  PID_setOutputRampRate(&angular_pid, 0.15);
+  PID_setOutputDescentRate(&angular_pid, -0.15);
+  PID_setFrequency(&angular_pid, 1000);
+
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -167,7 +250,7 @@ int main(void)
 	  //Loop should execute once every 1 tick
 	  if(HAL_GetTick() - prev_time >= 1)
 	  {
-//		  imuRead(acc, &temp, gyro);
+		  imuRead(acc, gyro, 0.2);
 		  encoderRead(encoder);
 		  calcVelFromEncoder(encoder, velocity);
 
@@ -175,47 +258,83 @@ int main(void)
 		  if((uint16_t)data_from_ros[SIZE_DATA_FROM_ROS / 2 - 1] == 0xFFFB)
 		  {
 			  //Data received from ros is integer format, multiplied by 1000
-			  double setpoint_vel[2] = {(double)data_from_ros[0] / 1000.0, (double)data_from_ros[1] / 1000.0};
+			  setpoint_vel[LEFT_INDEX] = (double)data_from_ros[0] / 1000.0;
+			  setpoint_vel[RIGHT_INDEX] = (double)data_from_ros[1] / 1000.0;
 
-			  //Ensure there is a commanded velocity, otherwise reset PID
-			  if(setpoint_vel[LEFT_INDEX] != 0.0)
+			  double target_angular = (setpoint_vel[RIGHT_INDEX] - setpoint_vel[LEFT_INDEX]) / 0.5;
+			  double curr_angular = (velocity[RIGHT_INDEX] - velocity[LEFT_INDEX]) / 0.5;
+			  angular_output = PID_getOutput(&angular_pid, curr_angular, target_angular);
+			  if(fabs(angular_output) > 0.05)
 			  {
-				  //Reset if there is a change in direction
-				  if(setpoint_vel_prev[LEFT_INDEX] * setpoint_vel[LEFT_INDEX] < 0)
-					  PID_reset(&left_pid);
+				  //If angular_output will reduce left setpoint_vel
+				  if(angular_output > 0 && setpoint_vel[LEFT_INDEX] * angular_output > 0)
+					  setpoint_vel[LEFT_INDEX] -= angular_output;
 
-				  left_output = PID_getOutput(&left_pid, velocity[LEFT_INDEX], setpoint_vel[LEFT_INDEX]);
+				  //If angular_output will reduce right setpoint_vel
+				  else if(angular_output < 0 && setpoint_vel[RIGHT_INDEX] * angular_output < 0)
+					  setpoint_vel[RIGHT_INDEX] += angular_output;
 			  }
 
-			  else
+			  //Unbrake motors if there is command, brake otherwise
+			  setBrakes();
+
+			  //Ensure there is a commanded velocity, otherwise reset PID
+			  if(fabs(setpoint_vel[LEFT_INDEX]) == 0 && fabs(velocity[LEFT_INDEX]) < 0.1)
 			  {
-				  left_output = 0;
+				  motor_command[LEFT_INDEX] = 0;
 				  PID_reset(&left_pid);
 			  }
 
-			  //Ensure there is a commanded velocity, otherwise reset PID
-			  if(setpoint_vel[RIGHT_INDEX] != 0.0)
+			  else if(!braked)
 			  {
-				  //Reset if there is a change in direction
-				  if(setpoint_vel_prev[RIGHT_INDEX] * setpoint_vel[RIGHT_INDEX] < 0)
-					  PID_reset(&right_pid);
+				  //ACCELERATE
+				  if((setpoint_vel[LEFT_INDEX] - velocity[LEFT_INDEX]) * velocity[LEFT_INDEX] > 0)
+				  {
+					  double new_left_ramp = base_left_ramp_rate + PID_getOutput(&left_ramp_pid, fabs(velocity[LEFT_INDEX]), fabs(setpoint_vel[LEFT_INDEX]));
+					  PID_setOutputRampRate(&left_pid, new_left_ramp);
+				  }
 
-				  right_output = PID_getOutput(&right_pid, velocity[RIGHT_INDEX], setpoint_vel[RIGHT_INDEX]);
+				  //DECELERATE
+				  else
+				  {
+					  double new_left_ramp = base_left_d_ramp_rate + PID_getOutput(&left_d_ramp_pid, fabs(setpoint_vel[LEFT_INDEX]), fabs(velocity[LEFT_INDEX]));
+					  PID_setOutputDescentRate(&left_pid, -new_left_ramp);
+				  }
+
+				  motor_command[LEFT_INDEX] = PID_getOutput(&left_pid, velocity[LEFT_INDEX], setpoint_vel[LEFT_INDEX]);
 			  }
 
-			  else
+			  //Ensure there is a commanded velocity, otherwise reset PID
+			  if(fabs(setpoint_vel[RIGHT_INDEX]) == 0 && fabs(velocity[RIGHT_INDEX]) < 0.1)
 			  {
-				  right_output = 0;
+				  motor_command[RIGHT_INDEX] = 0;
 				  PID_reset(&right_pid);
 			  }
 
-			  //Send pulse command to motors
-			  htim4.Instance->CCR2 = (int)left_output + 1500;
-			  htim4.Instance->CCR1 = (int)right_output + 1500;
+			  else if(!braked)
+			  {
 
-			  //Record previous velocity to chcek if there is a change in direction at next time step
-			  setpoint_vel_prev[LEFT_INDEX] = setpoint_vel[LEFT_INDEX];
-			  setpoint_vel_prev[RIGHT_INDEX] = setpoint_vel[RIGHT_INDEX];
+				  //ACCELERATE
+				  if((setpoint_vel[RIGHT_INDEX] - velocity[RIGHT_INDEX]) * velocity[RIGHT_INDEX] > 0)
+				  {
+					  double new_right_ramp = base_right_ramp_rate + PID_getOutput(&right_ramp_pid, fabs(velocity[RIGHT_INDEX]), fabs(setpoint_vel[RIGHT_INDEX]));
+					  PID_setOutputRampRate(&right_pid, new_right_ramp);
+				  }
+
+				  //DECELERATE
+				  else
+				  {
+					  double new_right_ramp = base_right_d_ramp_rate + PID_getOutput(&right_d_ramp_pid, fabs(setpoint_vel[RIGHT_INDEX]), fabs(velocity[RIGHT_INDEX]));
+					  PID_setOutputDescentRate(&right_pid, -new_right_ramp);
+				  }
+
+				  motor_command[RIGHT_INDEX] = PID_getOutput(&right_pid, velocity[RIGHT_INDEX], setpoint_vel[RIGHT_INDEX]);
+			  }
+
+
+			  //Send PID commands to motor
+			  MOTOR_TIM.Instance->CCR2 = motor_command[LEFT_INDEX] + 1500;
+			  MOTOR_TIM.Instance->CCR1 = motor_command[RIGHT_INDEX] + 1500;
 		  }
 
 		  prev_time = HAL_GetTick();
@@ -329,7 +448,7 @@ static void MX_ADC1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN ADC1_Init 2 */
-  HAL_ADC_Start_DMA(&hadc1, &joystick_raw, 2);
+
   /* USER CODE END ADC1_Init 2 */
 
 }
@@ -367,62 +486,46 @@ static void MX_SPI1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN SPI1_Init 2 */
-	// Encoder 1 chip select pin setup
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
-	GPIO_InitStruct.Pin = ENCODER1_CS_PIN;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	HAL_GPIO_Init(ENCODER1_CS_PORT, &GPIO_InitStruct);
+
   /* USER CODE END SPI1_Init 2 */
 
 }
 
 /**
-  * @brief SPI3 Initialization Function
+  * @brief SPI4 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_SPI3_Init(void)
+static void MX_SPI4_Init(void)
 {
 
-  /* USER CODE BEGIN SPI3_Init 0 */
+  /* USER CODE BEGIN SPI4_Init 0 */
 
-  /* USER CODE END SPI3_Init 0 */
+  /* USER CODE END SPI4_Init 0 */
 
-  /* USER CODE BEGIN SPI3_Init 1 */
+  /* USER CODE BEGIN SPI4_Init 1 */
 
-  /* USER CODE END SPI3_Init 1 */
-  /* SPI3 parameter configuration*/
-  hspi3.Instance = SPI3;
-  hspi3.Init.Mode = SPI_MODE_MASTER;
-  hspi3.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi3.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;
-  hspi3.Init.CLKPhase = SPI_PHASE_1EDGE;
-  hspi3.Init.NSS = SPI_NSS_SOFT;
-  hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
-  hspi3.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi3.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi3.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi3.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi3) != HAL_OK)
+  /* USER CODE END SPI4_Init 1 */
+  /* SPI4 parameter configuration*/
+  hspi4.Instance = SPI4;
+  hspi4.Init.Mode = SPI_MODE_MASTER;
+  hspi4.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi4.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi4.Init.CLKPolarity = SPI_POLARITY_HIGH;
+  hspi4.Init.CLKPhase = SPI_PHASE_2EDGE;
+  hspi4.Init.NSS = SPI_NSS_SOFT;
+  hspi4.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
+  hspi4.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi4.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi4.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi4.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi4) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN SPI3_Init 2 */
-	// SPI 3 is connected to IMU
-	//Initialize chip select pin (PA8) for IMU
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
-	GPIO_InitStruct.Pin = IMU_CS_PIN;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	HAL_GPIO_Init(IMU_CS_PORT, &GPIO_InitStruct);
+  /* USER CODE BEGIN SPI4_Init 2 */
 
-	//Initialize IMU, check that it is connected
-	IMU_Init();
-  /* USER CODE END SPI3_Init 2 */
+  /* USER CODE END SPI4_Init 2 */
 
 }
 
@@ -459,13 +562,7 @@ static void MX_SPI6_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN SPI6_Init 2 */
-	// Encoder 2 chip select setup
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
-	GPIO_InitStruct.Pin = ENCODER2_CS_PIN;
-	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	HAL_GPIO_Init(ENCODER2_CS_PORT, &GPIO_InitStruct);
+
   /* USER CODE END SPI6_Init 2 */
 
 }
@@ -526,6 +623,10 @@ static void MX_TIM4_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN TIM4_Init 2 */
 
   /* USER CODE END TIM4_Init 2 */
@@ -561,9 +662,7 @@ static void MX_USART2_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN USART2_Init 2 */
-  //Start receiving and sending data, callback will be called once receive or transmit is complete
-  HAL_UART_Receive_DMA(&huart2, data_from_ros_raw, SIZE_DATA_FROM_ROS);
-  HAL_UART_Transmit_DMA(&huart2, (uint8_t*)data_to_ros, SIZE_DATA_TO_ROS);
+
   /* USER CODE END USART2_Init 2 */
 
 }
@@ -598,13 +697,44 @@ static void MX_DMA_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOG, GPIO_PIN_8, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
+
+  /*Configure GPIO pin : PA4 */
+  GPIO_InitStruct.Pin = GPIO_PIN_4;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PG8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOG, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA8 */
+  GPIO_InitStruct.Pin = GPIO_PIN_8;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 }
 
@@ -617,43 +747,43 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 		//Both channels of ADC (channel 0 and channel 1) are each 16 bit
 		//Both are stored in joystick_raw, a 32bit unsigned int
 		//Separate both readings in the below code into 2 variables
-		joystick[0] = joystick_raw;
-		joystick[1] = joystick_raw >> 16;
+		joystick[1] = joystick[1] * (1 - joystick_filter) + (joystick_raw & 0x0000FFFF) * joystick_filter;
+		joystick[0] = joystick[0] * (1 - joystick_filter) + (joystick_raw >> 16) * joystick_filter;
 	}
 }
 
-// ROS data reception callback function
+// UART data reception callback function
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-	static int huart2_synchronized = 0;
+	static int huart_synchronized = 0;
 	static uint8_t synchronize_data;
-	if(huart == &huart2)
+	if(huart == &ROS_UART)
 	{
 		//Serial connection to ROS might have been made midway through a full packet
 		//Therefore, read the packets 1 by 1 until the end byte is reached.
 		//Once reached, then uart from ros to stm32 is synchronized, read all bytes as normal after that
-		if(huart2_synchronized < 2)
+		if(huart_synchronized < 2)
 		{
 			//LSB First, check byte is 0xFFFB
-			if(huart2_synchronized == 0)
+			if(huart_synchronized == 0)
 			{
 				if(synchronize_data == 0xFB)
-					huart2_synchronized++;
+					huart_synchronized++;
 			}
 
 			else
 			{
 				if(synchronize_data == 0xFF)
-					huart2_synchronized++;
+					huart_synchronized++;
 			}
 
 			//Check if uart is still not synchronized. If not, then continue receiving single bytes
-			if(huart2_synchronized < 2)
-				HAL_UART_Receive_DMA(&huart2, &synchronize_data, 1);
+			if(huart_synchronized < 2)
+				HAL_UART_Receive_DMA(&ROS_UART, &synchronize_data, 1);
 
 			//Else start receiving all the bytes from ROS like normal
 			else
-				HAL_UART_Receive_DMA(&huart2, data_from_ros_raw, SIZE_DATA_FROM_ROS);
+				HAL_UART_Receive_DMA(&ROS_UART, data_from_ros_raw, SIZE_DATA_FROM_ROS);
 		}
 
 		//Receive buffer is already synchronized
@@ -668,15 +798,15 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 					data_from_ros[i / 2] = (int16_t)data_from_ros_raw[i + 1] << 8 | (int16_t)data_from_ros_raw[i];
 
 				//Receive next data from ROS
-				HAL_UART_Receive_DMA(&huart2, data_from_ros_raw, SIZE_DATA_FROM_ROS);
+				HAL_UART_Receive_DMA(&ROS_UART, data_from_ros_raw, SIZE_DATA_FROM_ROS);
 				return;
 			}
 
 			//Data is no longer synchronized, reset
 			else
 			{
-				huart2_synchronized = 0;
-				HAL_UART_Receive_DMA(&huart2, &synchronize_data, 1);
+				huart_synchronized = 0;
+				HAL_UART_Receive_DMA(&ROS_UART, &synchronize_data, 1);
 				return;
 			}
 
@@ -686,7 +816,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-	if(huart == &huart2)
+	//Callback triggeredby TX complete to ROS
+	if(huart == &ROS_UART)
 	{
 		//Joystick values are raw ADC values, integer format
 		data_to_ros[0] = joystick[1];
@@ -710,7 +841,34 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 		//Send data to ros again
 		//Force STM32 to treat data_to_ros as a uint8_t pointer array as that is what's required.
 		//Data will get sent along as normal, then ROS end can combine 2 bytes of data to get original data
-		HAL_UART_Transmit_DMA(&huart2, (uint8_t*)data_to_ros, (uint16_t)SIZE_DATA_TO_ROS * 2);
+		HAL_UART_Transmit_DMA(&ROS_UART, (uint8_t*)data_to_ros, (uint16_t)SIZE_DATA_TO_ROS * 2);
+	}
+}
+
+void setBrakes()
+{
+	if((setpoint_vel[LEFT_INDEX] != 0 || setpoint_vel[RIGHT_INDEX] != 0))
+	{
+		BRAKE_TIM.Instance->BRAKE_CHANNEL = 2000;
+		braked = 0;
+		brake_timer = 0;
+	}
+
+	else if(setpoint_vel[LEFT_INDEX] == 0 && setpoint_vel[RIGHT_INDEX] == 0)
+	{
+		if(fabs(velocity[LEFT_INDEX]) < 0.05 && fabs(velocity[RIGHT_INDEX]) < 0.05)
+		{
+			//Start timer before braking
+			if(brake_timer == 0)
+				brake_timer = HAL_GetTick();
+
+			else if(HAL_GetTick() - brake_timer > engage_brakes_timeout * FREQUENCY)
+			{
+				BRAKE_TIM.Instance->BRAKE_CHANNEL = 1000;
+				braked = 1;
+				brake_timer = 0;
+			}
+		}
 	}
 }
 /* USER CODE END 4 */
