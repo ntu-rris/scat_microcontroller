@@ -64,7 +64,7 @@ void Error_Handler(void);
 //Frequency determines number of ticks per second
 //Therefore, s/ticks = 1/(FREQUENCY)
 #define FREQUENCY 1000 //ticks/second
-#define SIZE_DATA_TO_ROS 11
+#define SIZE_DATA_TO_ROS 12
 
 //Number of 8b packets
 #define SIZE_DATA_FROM_ROS 6

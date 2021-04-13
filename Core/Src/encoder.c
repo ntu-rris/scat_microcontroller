@@ -68,8 +68,8 @@ void calcVelFromEncoder(uint16_t *encoder_vals, double *velocities)
 	}
 
 	//Get difference in encoder
-	double diff_enc_left = encoder_vals[LEFT_INDEX] - encoder_vals_prev[LEFT_INDEX];
-	double diff_enc_right = encoder_vals[RIGHT_INDEX] - encoder_vals_prev[RIGHT_INDEX];
+	int16_t diff_enc_left = encoder_vals[LEFT_INDEX] - encoder_vals_prev[LEFT_INDEX];
+	int16_t diff_enc_right = encoder_vals[RIGHT_INDEX] - encoder_vals_prev[RIGHT_INDEX];
 
 	//Get difference in time
 	double dt = (HAL_GetTick() - prev_time) / (double)FREQUENCY;
@@ -88,8 +88,15 @@ void calcVelFromEncoder(uint16_t *encoder_vals, double *velocities)
 	else if (diff_enc_left > ENCODER_MAX / 2.0)
 		diff_enc_left -= ENCODER_MAX;
 
-	velocities[RIGHT_INDEX] = diff_enc_right / ENCODER_MAX * M_PI * WHEEL_DIA / dt;
-	velocities[LEFT_INDEX] = -diff_enc_left / ENCODER_MAX * M_PI * WHEEL_DIA / dt;
+//	double temp_vels[2];
+	velocities[RIGHT_INDEX] = (double)diff_enc_right / ENCODER_MAX * M_PI * WHEEL_DIA / dt;
+	velocities[LEFT_INDEX] = -(double)diff_enc_left / ENCODER_MAX * M_PI * WHEEL_DIA / dt;
+
+	if(fabs(velocities[RIGHT_INDEX]) < 0.05)
+		velocities[RIGHT_INDEX] = 0.000;
+
+	if(fabs(velocities[LEFT_INDEX]) < 0.05)
+		velocities[LEFT_INDEX] = 0.000;
 
 	// Sometimes data gets lost and spikes are seen in the velocity readouts.
 	// This is solved by limiting the max difference between subsequent velocity readouts.

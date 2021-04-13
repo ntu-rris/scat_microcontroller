@@ -39,8 +39,10 @@
 /* USER CODE BEGIN PD */
 #define ROS_UART huart2
 #define BRAKE_TIM htim4
-#define BRAKE_CHANNEL CCR1
+#define BRAKE_CHANNEL CCR4
 #define MOTOR_TIM htim4
+#define LEFT_MOTOR_CHANNEL CCR3
+#define RIGHT_MOTOR_CHANNEL CCR1
 
 /* USER CODE END PD */
 
@@ -70,6 +72,10 @@ int16_t acc[3], gyro[3];
 uint16_t encoder[2];
 uint8_t data_from_ros_raw[SIZE_DATA_FROM_ROS] = {0};
 
+uint16_t e_stop = 1;
+uint16_t prev_e_stop = 0;
+uint32_t last_e_stop_time = 0;
+
 //Variables to store processed data
 uint16_t joystick[2];
 double joystick_filter = 0.025;
@@ -82,6 +88,7 @@ uint8_t braked = 1; //Stores the brake status of left and right motors
 double filtered_setpoint[2] = {0};
 double setpoint_vel[2];
 uint32_t brake_timer = 0;
+uint32_t prev_uart_time = 0;
 double engage_brakes_timeout = 5; //5s
 double angular_output = 0;
 
@@ -156,16 +163,21 @@ int main(void)
   HAL_TIM_Base_Start(&MOTOR_TIM);
   HAL_TIM_PWM_Start(&MOTOR_TIM, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&MOTOR_TIM, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&MOTOR_TIM, TIM_CHANNEL_3);
 
   //Start brake PWM pins
-  HAL_TIM_Base_Start(&BRAKE_TIM);
-  HAL_TIM_PWM_Start(&BRAKE_TIM, TIM_CHANNEL_1);
+//  HAL_TIM_Base_Start(&BRAKE_TIM);
+  HAL_TIM_PWM_Start(&BRAKE_TIM, TIM_CHANNEL_4);
 
   //Engage brakes
   BRAKE_TIM.Instance->BRAKE_CHANNEL = 1000;
 
   //Initialize IMU, check that it is connected
   IMU_Init();
+
+  //Start UART output
+  HAL_UART_Transmit_DMA(&ROS_UART, (uint8_t*)data_to_ros, (uint16_t)SIZE_DATA_TO_ROS * 2);
+  HAL_UART_Receive_DMA(&ROS_UART, data_from_ros_raw, SIZE_DATA_FROM_ROS);
 
   //********* WHEEL PID *********//
   double base_left_ramp_rate = 100;
@@ -193,7 +205,7 @@ int main(void)
 
   //********* WHEEL ACCEL RAMP PID *********//
   double ramp_p = 300;
-  double max_ramp_rate_inc = 150;
+  double max_ramp_rate_inc = 200;
   //Setup right wheel ramp PID
   PID_Init(&right_ramp_pid);
   PID_setPIDF(&right_ramp_pid, ramp_p, 0, 0, 0);
@@ -254,6 +266,24 @@ int main(void)
 		  encoderRead(encoder);
 		  calcVelFromEncoder(encoder, velocity);
 
+		  uint16_t temp_e_stop = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12);
+		  //Falling edge, start timer
+		  if(temp_e_stop - prev_e_stop == -1)
+		  {
+			  last_e_stop_time = HAL_GetTick();
+		  }
+
+		  //Triggered, timer is started, check if time reached
+		  else if(prev_e_stop == 0 && last_e_stop_time != 0 && (HAL_GetTick() - last_e_stop_time) > (0.1 * FREQUENCY))
+		  {
+			  //XOR Negate operation
+			  e_stop = e_stop ^ 1;
+
+			  //Reset time
+			  last_e_stop_time = 0;
+		  }
+		  prev_e_stop = temp_e_stop;
+
 		  //use speed from data_from_ros array, pass on to motors, ensure the data is valid by checking end bit
 		  if((uint16_t)data_from_ros[SIZE_DATA_FROM_ROS / 2 - 1] == 0xFFFB)
 		  {
@@ -273,6 +303,23 @@ int main(void)
 				  //If angular_output will reduce right setpoint_vel
 				  else if(angular_output < 0 && setpoint_vel[RIGHT_INDEX] * angular_output < 0)
 					  setpoint_vel[RIGHT_INDEX] += angular_output;
+			  }
+
+			  //If e stop engaged, override setpoints to 0
+			  if(e_stop == 1)
+			  {
+				  setpoint_vel[LEFT_INDEX] = 0;
+				  setpoint_vel[RIGHT_INDEX] = 0;
+			  }
+
+			  //If data is old, set setpoint to 0
+			  else if((HAL_GetTick() - prev_uart_time) > FREQUENCY * 0.2)
+			  {
+				  setpoint_vel[LEFT_INDEX] = 0;
+				  setpoint_vel[RIGHT_INDEX] = 0;
+				  //This line below is blocking, have not extensively tested if this is safe
+//				  HAL_UART_AbortReceive(&huart2);
+				  HAL_UART_Receive_DMA(&ROS_UART, data_from_ros_raw, SIZE_DATA_FROM_ROS);
 			  }
 
 			  //Unbrake motors if there is command, brake otherwise
@@ -333,8 +380,8 @@ int main(void)
 
 
 			  //Send PID commands to motor
-			  MOTOR_TIM.Instance->CCR2 = motor_command[LEFT_INDEX] + 1500;
-			  MOTOR_TIM.Instance->CCR1 = motor_command[RIGHT_INDEX] + 1500;
+			  MOTOR_TIM.Instance->RIGHT_MOTOR_CHANNEL = motor_command[LEFT_INDEX] + 1500;
+			  MOTOR_TIM.Instance->LEFT_MOTOR_CHANNEL = motor_command[RIGHT_INDEX] + 1500;
 		  }
 
 		  prev_time = HAL_GetTick();
@@ -448,7 +495,7 @@ static void MX_ADC1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN ADC1_Init 2 */
-
+  HAL_ADC_Start_DMA(&hadc1, &joystick_raw, 2);
   /* USER CODE END ADC1_Init 2 */
 
 }
@@ -623,6 +670,10 @@ static void MX_TIM4_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
   {
     Error_Handler();
@@ -703,6 +754,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
 
@@ -721,6 +773,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PG8 */
   GPIO_InitStruct.Pin = GPIO_PIN_8;
@@ -779,16 +837,25 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 			//Check if uart is still not synchronized. If not, then continue receiving single bytes
 			if(huart_synchronized < 2)
+			{
 				HAL_UART_Receive_DMA(&ROS_UART, &synchronize_data, 1);
+				return;
+			}
 
 			//Else start receiving all the bytes from ROS like normal
 			else
+			{
 				HAL_UART_Receive_DMA(&ROS_UART, data_from_ros_raw, SIZE_DATA_FROM_ROS);
+				return;
+			}
 		}
 
 		//Receive buffer is already synchronized
 		else
 		{
+			//Mark previous UART time
+			prev_uart_time = HAL_GetTick();
+
 			//Combine check bit to ensure uart is still synchronized, otherwise reset synchronized flag
 			data_from_ros[SIZE_DATA_FROM_ROS / 2 - 1] = (int16_t)data_from_ros_raw[SIZE_DATA_FROM_ROS - 1] << 8 | data_from_ros_raw[SIZE_DATA_FROM_ROS - 2];
 			if((uint16_t)data_from_ros[SIZE_DATA_FROM_ROS / 2 - 1] == 0xFFFB)
@@ -836,7 +903,9 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 		data_to_ros[8] = gyro[1];
 		data_to_ros[9] = gyro[2];
 
-		data_to_ros[10] = (uint16_t)0xabcd;
+		data_to_ros[10] = e_stop;
+
+		data_to_ros[11] = (uint16_t)0xabcd;
 
 		//Send data to ros again
 		//Force STM32 to treat data_to_ros as a uint8_t pointer array as that is what's required.
