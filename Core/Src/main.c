@@ -73,8 +73,6 @@ uint16_t encoder[2];
 uint8_t data_from_ros_raw[SIZE_DATA_FROM_ROS] = {0};
 
 uint16_t e_stop = 1;
-uint16_t prev_e_stop = 0;
-uint32_t last_e_stop_time = 0;
 
 //Variables to store processed data
 uint16_t joystick[2];
@@ -166,7 +164,6 @@ int main(void)
   HAL_TIM_PWM_Start(&MOTOR_TIM, TIM_CHANNEL_3);
 
   //Start brake PWM pins
-//  HAL_TIM_Base_Start(&BRAKE_TIM);
   HAL_TIM_PWM_Start(&BRAKE_TIM, TIM_CHANNEL_4);
 
   //Engage brakes
@@ -266,23 +263,7 @@ int main(void)
 		  encoderRead(encoder);
 		  calcVelFromEncoder(encoder, velocity);
 
-		  uint16_t temp_e_stop = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12);
-		  //Falling edge, start timer
-		  if(temp_e_stop - prev_e_stop == -1)
-		  {
-			  last_e_stop_time = HAL_GetTick();
-		  }
-
-		  //Triggered, timer is started, check if time reached
-		  else if(prev_e_stop == 0 && last_e_stop_time != 0 && (HAL_GetTick() - last_e_stop_time) > (0.1 * FREQUENCY))
-		  {
-			  //XOR Negate operation
-			  e_stop = e_stop ^ 1;
-
-			  //Reset time
-			  last_e_stop_time = 0;
-		  }
-		  prev_e_stop = temp_e_stop;
+		  e_stop = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12);
 
 		  //use speed from data_from_ros array, pass on to motors, ensure the data is valid by checking end bit
 		  if((uint16_t)data_from_ros[SIZE_DATA_FROM_ROS / 2 - 1] == 0xFFFB)
