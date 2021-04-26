@@ -182,7 +182,7 @@ int main(void)
   //********* WHEEL PID *********//
   double base_left_ramp_rate = 100;
   double base_right_ramp_rate = 100;
-  double base_left_d_ramp_rate = 100;
+  double base_left_d_ramp_rate = 200;
   double base_right_d_ramp_rate = 100;
 
   //Setup right wheel PID
@@ -290,7 +290,12 @@ int main(void)
 
 			  //Sigmoid curve to make angular_output more sensitive in mid range (~0.5)
 			  //~0.5 is max value that occurs when going from pure rotation to pure forward
-			  angular_output = 1/(1 + exp(-15*(fabs(angular_output) - 0.4))) * sign;
+			  angular_output = 1/(1 + exp(-15*(fabs(angular_output) - 0.35))) * sign;
+
+			  //Small velocities cause large changes to heading due to noise
+			  //Set difference to 0 if below threshold, no correction
+			  if(fabs(velocity[LEFT_INDEX]) < 0.1 && fabs(velocity[RIGHT_INDEX]) < 0.1)
+				  angular_output = 0;
 
 			  //Amount of penalty to setpoint depends on how far away from the target heading
 			  //Scale may increase over 100%, but does not matter as the heading approaches target heading
