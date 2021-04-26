@@ -90,6 +90,9 @@ uint32_t prev_uart_time = 0;
 double engage_brakes_timeout = 5; //5s
 double angular_output = 0;
 
+//Velocity stuff
+double target_heading, curr_heading;
+
 //PID struct and their tunings. There's one PID controller for each motor
 PID_Struct left_pid, right_pid, left_ramp_pid, right_ramp_pid, left_d_ramp_pid, right_d_ramp_pid;
 double p = 450.0, i = 500.0, d = 0.0, f = 370, max_i_output = 30;
@@ -178,9 +181,9 @@ int main(void)
 
   //********* WHEEL PID *********//
   double base_left_ramp_rate = 100;
-  double base_right_ramp_rate = 150;
+  double base_right_ramp_rate = 100;
   double base_left_d_ramp_rate = 100;
-  double base_right_d_ramp_rate = 160;
+  double base_right_d_ramp_rate = 100;
 
   //Setup right wheel PID
   PID_Init(&right_pid);
@@ -202,10 +205,12 @@ int main(void)
 
   //********* WHEEL ACCEL RAMP PID *********//
   double ramp_p = 300;
-  double max_ramp_rate_inc = 200;
+  double ramp_d = 0;
+  double ramp_i = 0;
+  double max_ramp_rate_inc = 400;
   //Setup right wheel ramp PID
   PID_Init(&right_ramp_pid);
-  PID_setPIDF(&right_ramp_pid, ramp_p, 0, 0, 0);
+  PID_setPIDF(&right_ramp_pid, ramp_p, ramp_i, ramp_d, 0);
   PID_setOutputLimits(&right_ramp_pid, 0, 400);
   PID_setOutputRampRate(&right_ramp_pid, max_ramp_rate_inc);
   PID_setOutputDescentRate(&right_ramp_pid, -max_ramp_rate_inc);
@@ -213,7 +218,7 @@ int main(void)
 
   //Setup left wheel ramp PID
   PID_Init(&left_ramp_pid);
-  PID_setPIDF(&left_ramp_pid, ramp_p, 0, 0, 0);
+  PID_setPIDF(&left_ramp_pid, ramp_p, ramp_i, ramp_d, 0);
   PID_setOutputLimits(&left_ramp_pid, 0, 400);
   PID_setOutputRampRate(&left_ramp_pid, max_ramp_rate_inc);
   PID_setOutputDescentRate(&left_ramp_pid, -max_ramp_rate_inc);
@@ -221,12 +226,13 @@ int main(void)
 
 
   //********* WHEEL DECEL RAMP PID *********//
-  double d_ramp_p = 500;
+  double d_ramp_p = 600;
   double max_d_ramp_rate_inc = 300;
+  double max_d_increase = 350;
   //Setup right wheel d ramp PID
   PID_Init(&right_d_ramp_pid);
   PID_setPIDF(&right_d_ramp_pid, d_ramp_p, 0, 0, 0);
-  PID_setOutputLimits(&right_d_ramp_pid, 0, 250);
+  PID_setOutputLimits(&right_d_ramp_pid, 0, max_d_increase);
   PID_setOutputRampRate(&right_d_ramp_pid, max_d_ramp_rate_inc);
   PID_setOutputDescentRate(&right_d_ramp_pid, -max_d_ramp_rate_inc);
   PID_setFrequency(&right_d_ramp_pid, 1000);
@@ -234,20 +240,10 @@ int main(void)
   //Setup left wheel d ramp PID
   PID_Init(&left_d_ramp_pid);
   PID_setPIDF(&left_d_ramp_pid, d_ramp_p, 0, 0, 0);
-  PID_setOutputLimits(&left_d_ramp_pid, 0, 250);
+  PID_setOutputLimits(&left_d_ramp_pid, 0, max_d_increase);
   PID_setOutputRampRate(&left_d_ramp_pid, max_d_ramp_rate_inc);
   PID_setOutputDescentRate(&left_d_ramp_pid, -max_d_ramp_rate_inc);
   PID_setFrequency(&left_d_ramp_pid, 1000);
-
-  //********* WHEEL ANGULAR DIFF PID *********//
-  PID_Struct angular_pid;
-  PID_Init(&angular_pid);
-  PID_setPIDF(&angular_pid, 0.10, 0, 0, 0);
-  PID_setOutputLimits(&angular_pid, -2, 2);
-  PID_setOutputRampRate(&angular_pid, 0.15);
-  PID_setOutputDescentRate(&angular_pid, -0.15);
-  PID_setFrequency(&angular_pid, 1000);
-
 
   /* USER CODE END 2 */
 
@@ -262,7 +258,6 @@ int main(void)
 		  imuRead(acc, gyro, 0.2);
 		  encoderRead(encoder);
 		  calcVelFromEncoder(encoder, velocity);
-
 		  e_stop = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12);
 
 		  //use speed from data_from_ros array, pass on to motors, ensure the data is valid by checking end bit
@@ -272,18 +267,38 @@ int main(void)
 			  setpoint_vel[LEFT_INDEX] = (double)data_from_ros[0] / 1000.0;
 			  setpoint_vel[RIGHT_INDEX] = (double)data_from_ros[1] / 1000.0;
 
-			  double target_angular = (setpoint_vel[RIGHT_INDEX] - setpoint_vel[LEFT_INDEX]) / 0.5;
-			  double curr_angular = (velocity[RIGHT_INDEX] - velocity[LEFT_INDEX]) / 0.5;
-			  angular_output = PID_getOutput(&angular_pid, curr_angular, target_angular);
-			  if(fabs(angular_output) > 0.05)
-			  {
-				  //If angular_output will reduce left setpoint_vel
-				  if(angular_output > 0 && setpoint_vel[LEFT_INDEX] * angular_output > 0)
-					  setpoint_vel[LEFT_INDEX] -= angular_output;
+			  //Heading is synonymous to radius of curvature for given velocity pair
+			  double target_angular = (setpoint_vel[RIGHT_INDEX] - setpoint_vel[LEFT_INDEX]);
+			  double curr_angular = (velocity[RIGHT_INDEX] - velocity[LEFT_INDEX]);
+			  double target_linear = (setpoint_vel[RIGHT_INDEX] + setpoint_vel[LEFT_INDEX]) / 2.0;
+			  double curr_linear = (velocity[RIGHT_INDEX] + velocity[LEFT_INDEX]) / 2.0;
+			  target_heading = atan2(target_linear, target_angular);
+			  curr_heading = atan2(curr_linear, curr_angular);
 
-				  //If angular_output will reduce right setpoint_vel
-				  else if(angular_output < 0 && setpoint_vel[RIGHT_INDEX] * angular_output < 0)
-					  setpoint_vel[RIGHT_INDEX] += angular_output;
+			  //This case might happen when curr_heading is M_PI and target_heading is -M_PI
+			  //In this case, both values should be equal signs
+			  if(target_heading == M_PI || curr_heading == M_PI)
+			  {
+				  curr_heading = fabs(curr_heading);
+				  target_heading = fabs(target_heading);
+			  }
+
+			  //When angular_output negative, right wheel is slower
+			  //When angular_output positive, left wheel is slower
+			  angular_output = (target_heading - curr_heading) / M_PI;
+			  int sign = angular_output / fabs(angular_output);
+
+			  //Sigmoid curve to make angular_output more sensitive in mid range (~0.5)
+			  //~0.5 is max value that occurs when going from pure rotation to pure forward
+			  angular_output = 1/(1 + exp(-15*(fabs(angular_output) - 0.4))) * sign;
+
+			  //Amount of penalty to setpoint depends on how far away from the target heading
+			  //Scale may increase over 100%, but does not matter as the heading approaches target heading
+			  //scale will approach 100%
+			  if(setpoint_vel[LEFT_INDEX] != 0.0 || setpoint_vel[RIGHT_INDEX] != 0.0)
+			  {
+				  setpoint_vel[LEFT_INDEX] *= (1 + angular_output);
+				  setpoint_vel[RIGHT_INDEX] *= (1 - angular_output);
 			  }
 
 			  //If e stop engaged, override setpoints to 0
@@ -298,8 +313,6 @@ int main(void)
 			  {
 				  setpoint_vel[LEFT_INDEX] = 0;
 				  setpoint_vel[RIGHT_INDEX] = 0;
-				  //This line below is blocking, have not extensively tested if this is safe
-//				  HAL_UART_AbortReceive(&huart2);
 				  HAL_UART_Receive_DMA(&ROS_UART, data_from_ros_raw, SIZE_DATA_FROM_ROS);
 			  }
 
@@ -316,14 +329,12 @@ int main(void)
 			  else if(!braked)
 			  {
 				  //ACCELERATE
-				  if((setpoint_vel[LEFT_INDEX] - velocity[LEFT_INDEX]) * velocity[LEFT_INDEX] > 0)
 				  {
 					  double new_left_ramp = base_left_ramp_rate + PID_getOutput(&left_ramp_pid, fabs(velocity[LEFT_INDEX]), fabs(setpoint_vel[LEFT_INDEX]));
 					  PID_setOutputRampRate(&left_pid, new_left_ramp);
 				  }
 
 				  //DECELERATE
-				  else
 				  {
 					  double new_left_ramp = base_left_d_ramp_rate + PID_getOutput(&left_d_ramp_pid, fabs(setpoint_vel[LEFT_INDEX]), fabs(velocity[LEFT_INDEX]));
 					  PID_setOutputDescentRate(&left_pid, -new_left_ramp);
@@ -343,14 +354,12 @@ int main(void)
 			  {
 
 				  //ACCELERATE
-				  if((setpoint_vel[RIGHT_INDEX] - velocity[RIGHT_INDEX]) * velocity[RIGHT_INDEX] > 0)
 				  {
 					  double new_right_ramp = base_right_ramp_rate + PID_getOutput(&right_ramp_pid, fabs(velocity[RIGHT_INDEX]), fabs(setpoint_vel[RIGHT_INDEX]));
 					  PID_setOutputRampRate(&right_pid, new_right_ramp);
 				  }
 
 				  //DECELERATE
-				  else
 				  {
 					  double new_right_ramp = base_right_d_ramp_rate + PID_getOutput(&right_d_ramp_pid, fabs(setpoint_vel[RIGHT_INDEX]), fabs(velocity[RIGHT_INDEX]));
 					  PID_setOutputDescentRate(&right_pid, -new_right_ramp);
