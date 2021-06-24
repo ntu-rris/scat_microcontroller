@@ -88,7 +88,6 @@ void calcVelFromEncoder(uint16_t *encoder_vals, double *velocities)
 	else if (diff_enc_left > ENCODER_MAX / 2.0)
 		diff_enc_left -= ENCODER_MAX;
 
-//	double temp_vels[2];
 	velocities[RIGHT_INDEX] = (double)diff_enc_right / ENCODER_MAX * M_PI * WHEEL_DIA / dt;
 	velocities[LEFT_INDEX] = -(double)diff_enc_left / ENCODER_MAX * M_PI * WHEEL_DIA / dt;
 

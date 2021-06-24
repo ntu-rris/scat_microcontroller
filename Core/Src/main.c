@@ -27,6 +27,7 @@
 #include <pid.h>
 #include <math.h>
 #include <stdio.h>
+//#include <bno055.h>
 #include <dwt_delay.h>
 /* USER CODE END Includes */
 
@@ -61,6 +62,7 @@ SPI_HandleTypeDef hspi6;
 
 TIM_HandleTypeDef htim4;
 
+UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart2_rx;
 DMA_HandleTypeDef hdma_usart2_tx;
@@ -108,6 +110,7 @@ static void MX_SPI1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_SPI6_Init(void);
 static void MX_SPI4_Init(void);
+static void MX_UART4_Init(void);
 /* USER CODE BEGIN PFP */
 void setBrakes();
 /* USER CODE END PFP */
@@ -158,6 +161,7 @@ int main(void)
   MX_USART2_UART_Init();
   MX_SPI6_Init();
   MX_SPI4_Init();
+  MX_UART4_Init();
   /* USER CODE BEGIN 2 */
 //  DWT_Init();
   //Start motor PWM pins
@@ -174,6 +178,9 @@ int main(void)
 
   //Initialize IMU, check that it is connected
   IMU_Init();
+
+  //Initialize BNO055
+//  BNO055Init();
 
   //Start UART output
   HAL_UART_Transmit_DMA(&ROS_UART, (uint8_t*)data_to_ros, (uint16_t)SIZE_DATA_TO_ROS * 2);
@@ -681,6 +688,39 @@ static void MX_TIM4_Init(void)
 }
 
 /**
+  * @brief UART4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UART4_Init(void)
+{
+
+  /* USER CODE BEGIN UART4_Init 0 */
+
+  /* USER CODE END UART4_Init 0 */
+
+  /* USER CODE BEGIN UART4_Init 1 */
+
+  /* USER CODE END UART4_Init 1 */
+  huart4.Instance = UART4;
+  huart4.Init.BaudRate = 115200;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_8;
+  if (HAL_UART_Init(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN UART4_Init 2 */
+
+  /* USER CODE END UART4_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -752,6 +792,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOG_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
