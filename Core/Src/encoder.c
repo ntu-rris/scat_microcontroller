@@ -91,11 +91,11 @@ void calcVelFromEncoder(uint16_t *encoder_vals, double *velocities)
 	velocities[RIGHT_INDEX] = (double)diff_enc_right / ENCODER_MAX * M_PI * WHEEL_DIA / dt;
 	velocities[LEFT_INDEX] = -(double)diff_enc_left / ENCODER_MAX * M_PI * WHEEL_DIA / dt;
 
-	if(fabs(velocities[RIGHT_INDEX]) < 0.05)
-		velocities[RIGHT_INDEX] = 0.000;
-
-	if(fabs(velocities[LEFT_INDEX]) < 0.05)
-		velocities[LEFT_INDEX] = 0.000;
+//	if(fabs(velocities[RIGHT_INDEX]) < 0.01)
+//		velocities[RIGHT_INDEX] = 0.000;
+//
+//	if(fabs(velocities[LEFT_INDEX]) < 0.01)
+//		velocities[LEFT_INDEX] = 0.000;
 
 	// Sometimes data gets lost and spikes are seen in the velocity readouts.
 	// This is solved by limiting the max difference between subsequent velocity readouts.
