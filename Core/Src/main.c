@@ -97,7 +97,13 @@ double target_heading, curr_heading;
 
 //PID struct and their tunings. There's one PID controller for each motor
 PID_Struct left_pid, right_pid, left_ramp_pid, right_ramp_pid, left_d_ramp_pid, right_d_ramp_pid;
-double p = 450.0, i = 500.0, d = 0.0, f = 370, max_i_output = 30;
+double p = 0.0, i = 100.0, d = 0.0, f = 340, max_i_output = 40;
+double pid_freq = 500;
+
+//Feedforward outputs from experimental data, at x speed, what feedforward factor is required
+//0.1 = 500, 0.2 = 450, 0.5 = 350, 0.7 = 320, 0.9 = 320
+//Feedforward equation to line fit = y=290(x-0.9)^2 + 310
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -187,17 +193,17 @@ int main(void)
   HAL_UART_Receive_DMA(&ROS_UART, data_from_ros_raw, SIZE_DATA_FROM_ROS);
 
   //********* WHEEL PID *********//
-  double base_left_ramp_rate = 100;
-  double base_right_ramp_rate = 100;
-  double base_left_d_ramp_rate = 200;
-  double base_right_d_ramp_rate = 100;
+double base_left_ramp_rate = 100;
+double base_right_ramp_rate = 100;
+double base_left_d_ramp_rate = 150;
+double base_right_d_ramp_rate = 150;
 
   //Setup right wheel PID
   PID_Init(&right_pid);
   PID_setPIDF(&right_pid, p, i, d, f);
   PID_setMaxIOutput(&right_pid, max_i_output);
   PID_setOutputLimits(&right_pid, -500, 500);
-  PID_setFrequency(&right_pid, 1000);
+  PID_setFrequency(&right_pid, pid_freq);
   PID_setOutputRampRate(&right_pid, base_right_ramp_rate);
   PID_setOutputDescentRate(&right_pid, -base_right_d_ramp_rate);
 
@@ -206,51 +212,52 @@ int main(void)
   PID_setPIDF(&left_pid, p, i, d, f);
   PID_setMaxIOutput(&left_pid, max_i_output);
   PID_setOutputLimits(&left_pid, -500, 500);
-  PID_setFrequency(&left_pid, 1000);
+  PID_setFrequency(&left_pid, pid_freq);
   PID_setOutputRampRate(&left_pid, base_left_ramp_rate);
   PID_setOutputDescentRate(&left_pid, -base_left_d_ramp_rate);
 
   //********* WHEEL ACCEL RAMP PID *********//
-  double ramp_p = 300;
-  double ramp_d = 0;
-  double ramp_i = 0;
-  double max_ramp_rate_inc = 400;
+  double right_ramp_p = 100;
+  double left_ramp_p = 100;
+  double max_ramp_rate_inc = 300;
   //Setup right wheel ramp PID
   PID_Init(&right_ramp_pid);
-  PID_setPIDF(&right_ramp_pid, ramp_p, ramp_i, ramp_d, 0);
+  PID_setPIDF(&right_ramp_pid, right_ramp_p, 0, 0, 0);
   PID_setOutputLimits(&right_ramp_pid, 0, 400);
   PID_setOutputRampRate(&right_ramp_pid, max_ramp_rate_inc);
   PID_setOutputDescentRate(&right_ramp_pid, -max_ramp_rate_inc);
-  PID_setFrequency(&right_ramp_pid, 1000);
+  PID_setFrequency(&right_ramp_pid, pid_freq);
 
   //Setup left wheel ramp PID
   PID_Init(&left_ramp_pid);
-  PID_setPIDF(&left_ramp_pid, ramp_p, ramp_i, ramp_d, 0);
+  PID_setPIDF(&left_ramp_pid, left_ramp_p, 0, 0, 0);
   PID_setOutputLimits(&left_ramp_pid, 0, 400);
   PID_setOutputRampRate(&left_ramp_pid, max_ramp_rate_inc);
   PID_setOutputDescentRate(&left_ramp_pid, -max_ramp_rate_inc);
-  PID_setFrequency(&left_ramp_pid, 1000);
+  PID_setFrequency(&left_ramp_pid, pid_freq);
 
 
   //********* WHEEL DECEL RAMP PID *********//
-  double d_ramp_p = 600;
-  double max_d_ramp_rate_inc = 300;
-  double max_d_increase = 350;
+  double right_d_ramp_p = 100;
+  double left_d_ramp_p = 150;
+  double right_max_d_ramp_rate_inc = 200;
+  double left_max_d_ramp_rate_inc = 200;
+  double max_d_increase = 550;
   //Setup right wheel d ramp PID
   PID_Init(&right_d_ramp_pid);
-  PID_setPIDF(&right_d_ramp_pid, d_ramp_p, 0, 0, 0);
+  PID_setPIDF(&right_d_ramp_pid, right_d_ramp_p, 0, 0, 0);
   PID_setOutputLimits(&right_d_ramp_pid, 0, max_d_increase);
-  PID_setOutputRampRate(&right_d_ramp_pid, max_d_ramp_rate_inc);
-  PID_setOutputDescentRate(&right_d_ramp_pid, -max_d_ramp_rate_inc);
-  PID_setFrequency(&right_d_ramp_pid, 1000);
+  PID_setOutputRampRate(&right_d_ramp_pid, right_max_d_ramp_rate_inc);
+  PID_setOutputDescentRate(&right_d_ramp_pid, -right_max_d_ramp_rate_inc);
+  PID_setFrequency(&right_d_ramp_pid, pid_freq);
 
   //Setup left wheel d ramp PID
   PID_Init(&left_d_ramp_pid);
-  PID_setPIDF(&left_d_ramp_pid, d_ramp_p, 0, 0, 0);
+  PID_setPIDF(&left_d_ramp_pid, left_d_ramp_p, 0, 0, 0);
   PID_setOutputLimits(&left_d_ramp_pid, 0, max_d_increase);
-  PID_setOutputRampRate(&left_d_ramp_pid, max_d_ramp_rate_inc);
-  PID_setOutputDescentRate(&left_d_ramp_pid, -max_d_ramp_rate_inc);
-  PID_setFrequency(&left_d_ramp_pid, 1000);
+  PID_setOutputRampRate(&left_d_ramp_pid, left_max_d_ramp_rate_inc);
+  PID_setOutputDescentRate(&left_d_ramp_pid, -left_max_d_ramp_rate_inc);
+  PID_setFrequency(&left_d_ramp_pid, pid_freq);
 
   /* USER CODE END 2 */
 
@@ -292,18 +299,20 @@ int main(void)
 
 			  //When angular_output negative, right wheel is slower
 			  //When angular_output positive, left wheel is slower
-			  angular_output = (target_heading - curr_heading) / M_PI;
-			  int sign = angular_output / fabs(angular_output);
+			  double new_angular_output = (target_heading - curr_heading) / M_PI;
+			  int sign = new_angular_output / fabs(new_angular_output);
 
-			  //Sigmoid curve to make angular_output more sensitive in mid range (~0.5)
+			  //Sigmoid curve to make new_angular_output more sensitive in mid range (~0.5)
 			  //~0.5 is max value that occurs when going from pure rotation to pure forward
-			  angular_output = 1/(1 + exp(-15*(fabs(angular_output) - 0.35))) * sign;
+			  new_angular_output = 1/(1 + exp(-15*(fabs(new_angular_output) - 0.35))) * sign;
 
 			  //Small velocities cause large changes to heading due to noise
 			  //Set difference to 0 if below threshold, no correction
 			  if(fabs(velocity[LEFT_INDEX]) < 0.1 && fabs(velocity[RIGHT_INDEX]) < 0.1)
-				  angular_output = 0;
+				  new_angular_output = 0;
 
+			  double angular_output_filt = 0.0;
+			  angular_output = angular_output_filt * (angular_output) + (1 - angular_output_filt) * new_angular_output;
 			  //Amount of penalty to setpoint depends on how far away from the target heading
 			  //Scale may increase over 100%, but does not matter as the heading approaches target heading
 			  //scale will approach 100%
@@ -312,6 +321,21 @@ int main(void)
 				  setpoint_vel[LEFT_INDEX] *= (1 + angular_output);
 				  setpoint_vel[RIGHT_INDEX] *= (1 - angular_output);
 			  }
+
+			  /**
+			   * Motor FEEDFORWARD params
+			   */
+			  double f_left = 290 * pow(fabs(setpoint_vel[LEFT_INDEX])-0.9, 2) + 310;
+			  double f_right = 290 * pow(fabs(setpoint_vel[RIGHT_INDEX])-0.9, 2) + 310;
+
+			  //Upper bound on feedforward equation
+			  if(setpoint_vel[LEFT_INDEX] > 1.0)
+				  f_left = 310;
+			  if(setpoint_vel[RIGHT_INDEX] > 1.0)
+				  f_right = 310;
+
+			  PID_setF(&left_pid, f_left);
+			  PID_setF(&right_pid, f_right);
 
 			  //If e stop engaged, override setpoints to 0
 			  if(e_stop == 1)
@@ -332,7 +356,7 @@ int main(void)
 			  setBrakes();
 
 			  //Ensure there is a commanded velocity, otherwise reset PID
-			  if(fabs(setpoint_vel[LEFT_INDEX]) == 0 && fabs(velocity[LEFT_INDEX]) < 0.1)
+			  if(fabs(setpoint_vel[LEFT_INDEX]) == 0 && fabs(velocity[LEFT_INDEX]) < 0.05)
 			  {
 				  motor_command[LEFT_INDEX] = 0;
 				  PID_reset(&left_pid);
@@ -356,7 +380,7 @@ int main(void)
 			  }
 
 			  //Ensure there is a commanded velocity, otherwise reset PID
-			  if(fabs(setpoint_vel[RIGHT_INDEX]) == 0 && fabs(velocity[RIGHT_INDEX]) < 0.1)
+			  if(fabs(setpoint_vel[RIGHT_INDEX]) == 0 && fabs(velocity[RIGHT_INDEX]) < 0.05)
 			  {
 				  motor_command[RIGHT_INDEX] = 0;
 				  PID_reset(&right_pid);
@@ -736,7 +760,7 @@ static void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 1 */
   huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
+  huart2.Init.BaudRate = 921600;
   huart2.Init.WordLength = UART_WORDLENGTH_8B;
   huart2.Init.StopBits = UART_STOPBITS_1;
   huart2.Init.Parity = UART_PARITY_NONE;

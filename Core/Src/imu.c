@@ -1,4 +1,5 @@
 #include <imu.h>
+#include <math.h>
 //#include <dwt_delay.h>
 
 extern SPI_HandleTypeDef IMU_SPI;
@@ -77,6 +78,10 @@ void imuRead(int16_t *acc, int16_t *gyro, double exponentialFilter)
 		acc[0] = acc[0] * (1.0 - exponentialFilter) + ((int16_t) rxBuff[6] | (int16_t)(rxBuff[7] << 8)) * exponentialFilter;
 		acc[1] = acc[1] * (1.0 - exponentialFilter) + ((int16_t) rxBuff[8] | (int16_t)(rxBuff[9] << 8)) * exponentialFilter;
 		acc[2] = acc[2] * (1.0 - exponentialFilter) + ((int16_t) rxBuff[10] | (int16_t)(rxBuff[11] << 8)) * exponentialFilter;
+
+		//Likely that IMU is stuck/hanged (z acceleration acc[2] should be around 16k), attempt to reinitialize IMU
+		if(fabs(acc[2]) > 32000)
+			IMU_Init();
 	}
 }
 

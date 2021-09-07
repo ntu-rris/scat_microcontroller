@@ -93,6 +93,12 @@ void PID_setPIDF(PID_Struct* pid, double p, double i, double d, double f)
 	checkSigns(pid);
 }
 
+void PID_setF(PID_Struct* pid, double f)
+{
+	pid->F = f;
+	checkSigns(pid);
+}
+
 void PID_setMaxIOutput(PID_Struct* pid, double maximum)
 {
 	pid->maxIOutput = maximum;
