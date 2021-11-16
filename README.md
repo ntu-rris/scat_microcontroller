@@ -10,3 +10,9 @@ separate header and source files.
 Feel free to use STMCubeMX's code generation to create new initialization code for new ports, it will not delete user added source and header files, nor will it delete any code
 that was added in the user code sections of main.c. Take note that if you disable a certain port, (eg SPI 1,3,6) because they have additional user code in the init functions for 
 SPI 1,3,6, they will get removed.
+
+## Sensor Block Diagram
+![block_diagram](motor_sensor.png)
+
+## Motor Control Block Diagram
+![block_diagram](motor_control.png)
