@@ -12,7 +12,7 @@ that was added in the user code sections of main.c. Take note that if you disabl
 SPI 1,3,6, they will get removed.
 
 ## Sensor Block Diagram
-![block_diagram](motor_sensor.png)
+![block_diagram](motor_sensor2.png)
 
 ## Motor Control Block Diagram
 ![block_diagram](motor_control.png)
