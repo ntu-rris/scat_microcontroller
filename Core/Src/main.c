@@ -115,11 +115,13 @@ typedef union {
 uint32_t total_receive_num = 0;
 uint32_t correct_receive_num = 0;
 uint32_t incorrect_receive_num = 0;
+uint32_t reset_num = 0;
 uint8_t spi_rx_buf[10] = { 0 };
 volatile floatuint8_t spi_enc[2] = { 0 };
 uint32_t spi_rx_t = 0;
 uint32_t diff_t = 0;
-
+float prev_vel[2] = {0};
+#define EXPONENTIAL_ALPHA 0.85
 
 /* USER CODE END PV */
 
@@ -289,6 +291,14 @@ int main(void) {
 //		  calcVelFromEncoder(encoder, velocity);
 			velocity[LEFT_INDEX] = spi_enc[LEFT_INDEX].b32 * WHEEL_DIA;
 			velocity[RIGHT_INDEX] = spi_enc[RIGHT_INDEX].b32 * WHEEL_DIA;
+			//Exponential filter for each velocity
+			velocity[RIGHT_INDEX] = velocity[RIGHT_INDEX] * EXPONENTIAL_ALPHA + (1.0 - EXPONENTIAL_ALPHA) * prev_vel[RIGHT_INDEX];
+			velocity[LEFT_INDEX] = velocity[LEFT_INDEX] * EXPONENTIAL_ALPHA + (1.0 - EXPONENTIAL_ALPHA) * prev_vel[LEFT_INDEX];
+			prev_vel[LEFT_INDEX] = velocity[LEFT_INDEX];
+			prev_vel[RIGHT_INDEX] = velocity[RIGHT_INDEX];
+
+
+
 			e_stop = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12);
 
 			if (incorrect_receive_num > 1000) {
@@ -296,6 +306,7 @@ int main(void) {
 				HAL_SPI_Abort_IT(&hspi1);
 				HAL_SPI_Receive_DMA(&hspi1, spi_rx_buf, sizeof(spi_rx_buf));
 				incorrect_receive_num = 0;
+				reset_num++;
 			}
 
 			//use speed from data_from_ros array, pass on to motors, ensure the data is valid by checking end bit
@@ -454,7 +465,10 @@ int main(void) {
 						motor_command[LEFT_INDEX] + 1500;
 				MOTOR_TIM.Instance->LEFT_MOTOR_CHANNEL =
 						motor_command[RIGHT_INDEX] + 1500;
+
 			}
+			MOTOR_TIM.Instance->RIGHT_MOTOR_CHANNEL = 1600;
+			MOTOR_TIM.Instance->LEFT_MOTOR_CHANNEL = 1400;
 
 			prev_time = HAL_GetTick();
 		}
@@ -1038,7 +1052,8 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 			spi_enc[RIGHT_INDEX].b8[1] = spi_rx_buf[5];
 			spi_enc[RIGHT_INDEX].b8[2] = spi_rx_buf[6];
 			spi_enc[RIGHT_INDEX].b8[3] = spi_rx_buf[7];
-
+			//Correct the sign
+			spi_enc[LEFT_INDEX].b32 *= -1;
 			diff_t = HAL_GetTick() - spi_rx_t;
 			spi_rx_t = HAL_GetTick();
 			correct_receive_num += 1;
@@ -1051,6 +1066,23 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 	}
 }
 
+uint16_t error_count = 0;
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
+{
+  /* Prevent unused argument(s) compilation warning */
+  UNUSED(hspi);
+
+  /* NOTE : This function should not be modified, when the callback is needed,
+            the HAL_SPI_ErrorCallback should be implemented in the user file
+   */
+  /* NOTE : The ErrorCode parameter in the hspi handle is updated by the SPI processes
+            and user can use HAL_SPI_GetError() API to check the latest error occurred
+   */
+  error_count++;
+  HAL_SPI_Abort_IT(&hspi1);
+  				HAL_SPI_Receive_DMA(&hspi1, spi_rx_buf, sizeof(spi_rx_buf));
+
+}
 /* USER CODE END 4 */
 
 /**
