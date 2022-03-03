@@ -287,26 +287,17 @@ int main(void) {
 		//Loop should execute once every 1 tick
 		if (HAL_GetTick() - prev_time >= 1) {
 			imuRead(acc, gyro, 0.2);
-//		  encoderRead(encoder);
-//		  calcVelFromEncoder(encoder, velocity);
-			velocity[LEFT_INDEX] = spi_enc[LEFT_INDEX].b32 * WHEEL_DIA;
-			velocity[RIGHT_INDEX] = spi_enc[RIGHT_INDEX].b32 * WHEEL_DIA;
-			//Exponential filter for each velocity
-			velocity[RIGHT_INDEX] = velocity[RIGHT_INDEX] * EXPONENTIAL_ALPHA + (1.0 - EXPONENTIAL_ALPHA) * prev_vel[RIGHT_INDEX];
-			velocity[LEFT_INDEX] = velocity[LEFT_INDEX] * EXPONENTIAL_ALPHA + (1.0 - EXPONENTIAL_ALPHA) * prev_vel[LEFT_INDEX];
-			prev_vel[LEFT_INDEX] = velocity[LEFT_INDEX];
-			prev_vel[RIGHT_INDEX] = velocity[RIGHT_INDEX];
-
-
-
 			e_stop = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12);
 
-			if (incorrect_receive_num > 1000) {
+			if (incorrect_receive_num > 100) {
 				//Restart transmission
 				HAL_SPI_Abort_IT(&hspi1);
 				HAL_SPI_Receive_DMA(&hspi1, spi_rx_buf, sizeof(spi_rx_buf));
 				incorrect_receive_num = 0;
 				reset_num++;
+			}
+			else if(HAL_GetTick() - spi_rx_t  > 100){
+				HAL_SPI_Receive_DMA(&hspi1, spi_rx_buf, sizeof(spi_rx_buf));
 			}
 
 			//use speed from data_from_ros array, pass on to motors, ensure the data is valid by checking end bit
@@ -467,8 +458,6 @@ int main(void) {
 						motor_command[RIGHT_INDEX] + 1500;
 
 			}
-			MOTOR_TIM.Instance->RIGHT_MOTOR_CHANNEL = 1600;
-			MOTOR_TIM.Instance->LEFT_MOTOR_CHANNEL = 1400;
 
 			prev_time = HAL_GetTick();
 		}
@@ -798,7 +787,7 @@ static void MX_USART2_UART_Init(void) {
 
 	/* USER CODE END USART2_Init 1 */
 	huart2.Instance = USART2;
-	huart2.Init.BaudRate = 921600;
+	huart2.Init.BaudRate = 576000;
 	huart2.Init.WordLength = UART_WORDLENGTH_8B;
 	huart2.Init.StopBits = UART_STOPBITS_1;
 	huart2.Init.Parity = UART_PARITY_NONE;
@@ -1030,11 +1019,21 @@ void setBrakes() {
 		}
 	}
 }
+static double filt_vel[2] = {
+		0
+	};
+	static double unfilt_vel[2] = {
+			0
+		};
+	static double prev_velo[2] = {
+		0
+	};
 
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 	/* NOTE : This function should not be modified, when the callback is needed,
 	 the HAL_SPI_RxCpltCallback should be implemented in the user file
 	 */
+
 
 	if (hspi == &hspi1) {
 		total_receive_num += 1;
@@ -1057,6 +1056,23 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 			diff_t = HAL_GetTick() - spi_rx_t;
 			spi_rx_t = HAL_GetTick();
 			correct_receive_num += 1;
+
+			//Exponential filter for each velocity
+			unfilt_vel[LEFT_INDEX] = spi_enc[LEFT_INDEX].b32 * WHEEL_DIA * 0.5;
+			unfilt_vel[RIGHT_INDEX] = spi_enc[RIGHT_INDEX].b32 * WHEEL_DIA * 0.5;
+
+			velocity[LEFT_INDEX] = 0.9 * filt_vel[LEFT_INDEX] + 0.05 * unfilt_vel[LEFT_INDEX]
+				+ 0.05 * prev_velo[LEFT_INDEX];
+			velocity[RIGHT_INDEX] = 0.9 * filt_vel[RIGHT_INDEX] + 0.05 * unfilt_vel[RIGHT_INDEX]
+				+ 0.05 * prev_velo[RIGHT_INDEX];
+
+			velocity[LEFT_INDEX] = (fabs(velocity[LEFT_INDEX]) < 0.01) ? 0 : velocity[LEFT_INDEX];
+			velocity[RIGHT_INDEX] = (fabs(velocity[RIGHT_INDEX]) < 0.01) ? 0 : velocity[RIGHT_INDEX];
+			filt_vel[LEFT_INDEX] = velocity[LEFT_INDEX];
+			filt_vel[RIGHT_INDEX] = velocity[RIGHT_INDEX];
+			prev_velo[LEFT_INDEX] = unfilt_vel[LEFT_INDEX];
+			prev_velo[RIGHT_INDEX] = unfilt_vel[RIGHT_INDEX];
+
 		} else {
 			incorrect_receive_num += 1;
 		}
@@ -1081,6 +1097,23 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
   error_count++;
   HAL_SPI_Abort_IT(&hspi1);
   				HAL_SPI_Receive_DMA(&hspi1, spi_rx_buf, sizeof(spi_rx_buf));
+
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  /* Prevent unused argument(s) compilation warning */
+  UNUSED(huart);
+
+  /* NOTE : This function should not be modified, when the callback is needed,
+            the HAL_SPI_ErrorCallback should be implemented in the user file
+   */
+  /* NOTE : The ErrorCode parameter in the hspi handle is updated by the SPI processes
+            and user can use HAL_SPI_GetError() API to check the latest error occurred
+   */
+//  error_count++;
+//  HAL_SPI_Abort_IT(&hspi1);
+//  				HAL_SPI_Receive_DMA(&hspi1, spi_rx_buf, sizeof(spi_rx_buf));
 
 }
 /* USER CODE END 4 */
