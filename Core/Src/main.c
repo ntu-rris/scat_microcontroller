@@ -787,7 +787,8 @@ static void MX_USART2_UART_Init(void) {
 
 	/* USER CODE END USART2_Init 1 */
 	huart2.Instance = USART2;
-	huart2.Init.BaudRate = 576000;
+//	huart2.Init.BaudRate = 576000;
+	huart2.Init.BaudRate = 230400;
 	huart2.Init.WordLength = UART_WORDLENGTH_8B;
 	huart2.Init.StopBits = UART_STOPBITS_1;
 	huart2.Init.Parity = UART_PARITY_NONE;
@@ -1065,23 +1066,22 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 		    // Sometimes data gets lost and spikes are seen in the velocity readouts.
 		    // This is solved by limiting the max difference between subsequent velocity readouts.
 		    // If acceleration is passed, just update velocity within acceleration limits
-//		    double dt = (double) diff_t / FREQUENCY;
-//
-//		    if (dt != 0) {
-//			double right_acc = (unfilt_vel[RIGHT_INDEX] - prev_vel[RIGHT_INDEX]) / dt;
-//			double left_acc = (unfilt_vel[LEFT_INDEX] - prev_vel[LEFT_INDEX]) / dt;
-//
-//			if (fabs(right_acc) > WHEEL_ACC_LIMIT) {
-//			    unfilt_vel[RIGHT_INDEX] = prev_vel[RIGHT_INDEX]
-//				    + WHEEL_ACC_LIMIT * dt * (right_acc / fabs(right_acc));
-//			}
-//
-//			if (fabs(left_acc) > WHEEL_ACC_LIMIT) {
-//			    unfilt_vel[LEFT_INDEX] = prev_vel[LEFT_INDEX] + WHEEL_ACC_LIMIT * dt * (left_acc / fabs(left_acc));
-//			}
-//
-//		    }
+		    double dt = (double) diff_t / FREQUENCY;
 
+		    if (dt != 0) {
+			double right_acc = (unfilt_vel[RIGHT_INDEX] - prev_velo[RIGHT_INDEX]) / dt;
+			double left_acc = (unfilt_vel[LEFT_INDEX] - prev_velo[LEFT_INDEX]) / dt;
+
+			if (fabs(right_acc) > WHEEL_ACC_LIMIT) {
+			    unfilt_vel[RIGHT_INDEX] = prev_velo[RIGHT_INDEX]
+				    + WHEEL_ACC_LIMIT * dt * (right_acc / fabs(right_acc));
+			}
+
+			if (fabs(left_acc) > WHEEL_ACC_LIMIT) {
+			    unfilt_vel[LEFT_INDEX] = prev_velo[LEFT_INDEX] + WHEEL_ACC_LIMIT * dt * (left_acc / fabs(left_acc));
+
+		    }
+		    }
 			velocity[LEFT_INDEX] = 0.9 * filt_vel[LEFT_INDEX] + 0.05 * unfilt_vel[LEFT_INDEX]
 				+ 0.05 * prev_velo[LEFT_INDEX];
 			velocity[RIGHT_INDEX] = 0.9 * filt_vel[RIGHT_INDEX] + 0.05 * unfilt_vel[RIGHT_INDEX]
@@ -1117,7 +1117,7 @@ void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
    */
   error_count++;
   HAL_SPI_Abort_IT(&hspi1);
-  				HAL_SPI_Receive_DMA(&hspi1, spi_rx_buf, sizeof(spi_rx_buf));
+  HAL_SPI_Receive_DMA(&hspi1, spi_rx_buf, sizeof(spi_rx_buf));
 
 }
 
