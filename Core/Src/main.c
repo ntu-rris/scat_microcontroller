@@ -116,7 +116,7 @@ uint32_t total_receive_num = 0;
 uint32_t correct_receive_num = 0;
 uint32_t incorrect_receive_num = 0;
 uint32_t reset_num = 0;
-uint8_t spi_rx_buf[10] = { 0 };
+uint8_t spi_rx_buf[11] = { 0 };
 volatile floatuint8_t spi_enc[2] = { 0 };
 uint32_t spi_rx_t = 0;
 uint32_t diff_t = 0;
@@ -1041,16 +1041,17 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 		for (int i = 0; i < 8; i++)
 			checksum += spi_rx_buf[i];
 
-		if ((spi_rx_buf[8] == (uint8_t) (checksum & 0xff))
-				&& (spi_rx_buf[9] == (uint8_t) ((checksum >> 8) & 0xff))) {
-			spi_enc[LEFT_INDEX].b8[0] = spi_rx_buf[0];
-			spi_enc[LEFT_INDEX].b8[1] = spi_rx_buf[1];
-			spi_enc[LEFT_INDEX].b8[2] = spi_rx_buf[2];
-			spi_enc[LEFT_INDEX].b8[3] = spi_rx_buf[3];
-			spi_enc[RIGHT_INDEX].b8[0] = spi_rx_buf[4];
-			spi_enc[RIGHT_INDEX].b8[1] = spi_rx_buf[5];
-			spi_enc[RIGHT_INDEX].b8[2] = spi_rx_buf[6];
-			spi_enc[RIGHT_INDEX].b8[3] = spi_rx_buf[7];
+		if (spi_rx_buf[0] == 0xAE && (spi_rx_buf[9] == (uint8_t) (checksum & 0xff))
+				&& (spi_rx_buf[10] == (uint8_t) ((checksum >> 8) & 0xff))) {
+			    floatuint8_t spi_enc[2];
+			    spi_enc[LEFT_INDEX].b8[0] = spi_rx_buf[1];
+			    spi_enc[LEFT_INDEX].b8[1] = spi_rx_buf[2];
+			    spi_enc[LEFT_INDEX].b8[2] = spi_rx_buf[3];
+			    spi_enc[LEFT_INDEX].b8[3] = spi_rx_buf[4];
+			    spi_enc[RIGHT_INDEX].b8[0] = spi_rx_buf[5];
+			    spi_enc[RIGHT_INDEX].b8[1] = spi_rx_buf[6];
+			    spi_enc[RIGHT_INDEX].b8[2] = spi_rx_buf[7];
+			    spi_enc[RIGHT_INDEX].b8[3] = spi_rx_buf[8];
 			//Correct the sign
 			spi_enc[LEFT_INDEX].b32 *= -1;
 			diff_t = HAL_GetTick() - spi_rx_t;
@@ -1060,6 +1061,26 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 			//Exponential filter for each velocity
 			unfilt_vel[LEFT_INDEX] = spi_enc[LEFT_INDEX].b32 * WHEEL_DIA * 0.5;
 			unfilt_vel[RIGHT_INDEX] = spi_enc[RIGHT_INDEX].b32 * WHEEL_DIA * 0.5;
+
+		    // Sometimes data gets lost and spikes are seen in the velocity readouts.
+		    // This is solved by limiting the max difference between subsequent velocity readouts.
+		    // If acceleration is passed, just update velocity within acceleration limits
+//		    double dt = (double) diff_t / FREQUENCY;
+//
+//		    if (dt != 0) {
+//			double right_acc = (unfilt_vel[RIGHT_INDEX] - prev_vel[RIGHT_INDEX]) / dt;
+//			double left_acc = (unfilt_vel[LEFT_INDEX] - prev_vel[LEFT_INDEX]) / dt;
+//
+//			if (fabs(right_acc) > WHEEL_ACC_LIMIT) {
+//			    unfilt_vel[RIGHT_INDEX] = prev_vel[RIGHT_INDEX]
+//				    + WHEEL_ACC_LIMIT * dt * (right_acc / fabs(right_acc));
+//			}
+//
+//			if (fabs(left_acc) > WHEEL_ACC_LIMIT) {
+//			    unfilt_vel[LEFT_INDEX] = prev_vel[LEFT_INDEX] + WHEEL_ACC_LIMIT * dt * (left_acc / fabs(left_acc));
+//			}
+//
+//		    }
 
 			velocity[LEFT_INDEX] = 0.9 * filt_vel[LEFT_INDEX] + 0.05 * unfilt_vel[LEFT_INDEX]
 				+ 0.05 * prev_velo[LEFT_INDEX];
