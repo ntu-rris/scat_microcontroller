@@ -1068,24 +1068,24 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 		    // If acceleration is passed, just update velocity within acceleration limits
 		    double dt = (double) diff_t / FREQUENCY;
 
-		    if (dt != 0) {
-			double right_acc = (unfilt_vel[RIGHT_INDEX] - prev_velo[RIGHT_INDEX]) / dt;
-			double left_acc = (unfilt_vel[LEFT_INDEX] - prev_velo[LEFT_INDEX]) / dt;
-
-			if (fabs(right_acc) > WHEEL_ACC_LIMIT) {
-			    unfilt_vel[RIGHT_INDEX] = prev_velo[RIGHT_INDEX]
-				    + WHEEL_ACC_LIMIT * dt * (right_acc / fabs(right_acc));
-			}
-
-			if (fabs(left_acc) > WHEEL_ACC_LIMIT) {
-			    unfilt_vel[LEFT_INDEX] = prev_velo[LEFT_INDEX] + WHEEL_ACC_LIMIT * dt * (left_acc / fabs(left_acc));
-
-		    }
-		    }
-			velocity[LEFT_INDEX] = 0.9 * filt_vel[LEFT_INDEX] + 0.05 * unfilt_vel[LEFT_INDEX]
-				+ 0.05 * prev_velo[LEFT_INDEX];
-			velocity[RIGHT_INDEX] = 0.9 * filt_vel[RIGHT_INDEX] + 0.05 * unfilt_vel[RIGHT_INDEX]
-				+ 0.05 * prev_velo[RIGHT_INDEX];
+//		    if (dt != 0) {
+//			double right_acc = (unfilt_vel[RIGHT_INDEX] - prev_velo[RIGHT_INDEX]) / dt;
+//			double left_acc = (unfilt_vel[LEFT_INDEX] - prev_velo[LEFT_INDEX]) / dt;
+//
+//			if (fabs(right_acc) > WHEEL_ACC_LIMIT) {
+//			    unfilt_vel[RIGHT_INDEX] = prev_velo[RIGHT_INDEX]
+//				    + WHEEL_ACC_LIMIT * dt * (right_acc / fabs(right_acc));
+//			}
+//
+//			if (fabs(left_acc) > WHEEL_ACC_LIMIT) {
+//			    unfilt_vel[LEFT_INDEX] = prev_velo[LEFT_INDEX] + WHEEL_ACC_LIMIT * dt * (left_acc / fabs(left_acc));
+//
+//		    }
+//		    }
+			velocity[LEFT_INDEX] = 0.85 * filt_vel[LEFT_INDEX] + 0.075 * unfilt_vel[LEFT_INDEX]
+				+ 0.075 * prev_velo[LEFT_INDEX];
+			velocity[RIGHT_INDEX] = 0.85 * filt_vel[RIGHT_INDEX] + 0.075 * unfilt_vel[RIGHT_INDEX]
+				+ 0.075 * prev_velo[RIGHT_INDEX];
 
 			velocity[LEFT_INDEX] = (fabs(velocity[LEFT_INDEX]) < 0.01) ? 0 : velocity[LEFT_INDEX];
 			velocity[RIGHT_INDEX] = (fabs(velocity[RIGHT_INDEX]) < 0.01) ? 0 : velocity[RIGHT_INDEX];
