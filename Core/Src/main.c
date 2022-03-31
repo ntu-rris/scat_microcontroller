@@ -1030,6 +1030,7 @@ static double filt_vel[2] = {
 		0
 	};
 
+uint32_t unsync = 0;
 void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 	/* NOTE : This function should not be modified, when the callback is needed,
 	 the HAL_SPI_RxCpltCallback should be implemented in the user file
@@ -1041,6 +1042,15 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 		uint16_t checksum = 0;
 		for (int i = 0; i < 8; i++)
 			checksum += spi_rx_buf[i];
+
+		//If SPI is not in sync
+		if (HAL_GetTick() - spi_rx_t> 1){
+			unsync+=1;
+			spi_rx_t = HAL_GetTick();
+			HAL_SPI_Receive_DMA(&hspi1, spi_rx_buf, sizeof(spi_rx_buf));
+			return;
+		}
+
 
 		if (spi_rx_buf[0] == 0xAE && (spi_rx_buf[9] == (uint8_t) (checksum & 0xff))
 				&& (spi_rx_buf[10] == (uint8_t) ((checksum >> 8) & 0xff))) {
@@ -1066,7 +1076,7 @@ void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
 		    // Sometimes data gets lost and spikes are seen in the velocity readouts.
 		    // This is solved by limiting the max difference between subsequent velocity readouts.
 		    // If acceleration is passed, just update velocity within acceleration limits
-		    double dt = (double) diff_t / FREQUENCY;
+//		    double dt = (double) diff_t / FREQUENCY;
 
 //		    if (dt != 0) {
 //			double right_acc = (unfilt_vel[RIGHT_INDEX] - prev_velo[RIGHT_INDEX]) / dt;
