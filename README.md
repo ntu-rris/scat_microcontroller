@@ -28,3 +28,9 @@ SPI 1,3,6, they will get removed.
 **Note*:
   - Brake channel is currently not connected
   - Encoder data is sending from other MCU to this MCU via SPI
+
+Link to secondary MCU (Used to read,process encoder data):
+https://github.com/angcx1997/ScatWheelchair_MCU_2
+
+Link to original author repo:
+https://github.com/angcx1997/scat_microcontroller/tree/master
