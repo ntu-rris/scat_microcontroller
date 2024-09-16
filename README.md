@@ -16,3 +16,21 @@ SPI 1,3,6, they will get removed.
 
 ## Motor Control Block Diagram
 ![block_diagram](motor_control2.png)
+
+## Hardware and Peripheral Used
+| Hardware | Peripheral Used | Pinout |
+| --- | ----------- |  ------- |
+| Joystick | ADC1 | PA0, PA1 |
+| IMU-MPU6000 | SPI4 | PA8(CS), PE2(SCK), PE5(MISO), PE6(MOSI) |
+| Base motor (Sabertooth) | TIM4 (Right)CH1  (Left)CH3 (Brake)CH4*| PD12(CH1), PD14(CH3), PD15(CH4) | 
+| Driving Encoder | SPI1* | PA5(SCK), PA7(MOSI) |
+
+**Note*:
+  - Brake channel is currently not connected
+  - Encoder data is sending from other MCU to this MCU via SPI
+
+Link to secondary MCU (Used to read,process encoder data):
+https://github.com/angcx1997/ScatWheelchair_MCU_2
+
+Link to original author repo:
+https://github.com/angcx1997/scat_microcontroller/tree/master
